@@ -1,0 +1,22 @@
+<head>
+  <title>webdo-migrate-to-meteor</title>
+</head>
+
+<body>
+  {{> users}}
+</body>
+
+<template name="users">
+  <h1>mysql database information:</h1>
+  <form>
+    <label for="host">host:</label><input name=host value=""><br>
+    <label for="database">database:</label><input name=database value=""><br>
+    <label for="user">user:</label><input name=user value=""><br>
+    <label for="password">password:</label><input type="password" name=password value=""><br>
+    <button type="submit">send</button>
+  </form>
+  <h1>users:</h1>
+  {{#each users}}
+  <div>{{name}}: {{rows.length}}</div>
+  {{/each}}
+</template>
