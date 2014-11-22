@@ -27,7 +27,6 @@ if (Meteor.isClient) {
         if (err) return alert('error' + err);
         Session.set("users", users);
       });
-      return false;
     }
   });
 }
