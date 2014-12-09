@@ -7,17 +7,38 @@
 </body>
 
 <template name="users">
-  <h1>mysql database information:</h1>
-  <form autocomplete="on" target="fake_iframe" onsubmit="return true">
+  <form id="mysql" autocomplete="on" target="fake_iframe" onsubmit="return true">
+    <h1>mysql database information:</h1>
     <label for="host">host:</label><input name=host value=""><br>
     <label for="database">database:</label><input name=database value=""><br>
     <label for="user">user:</label><input name=user value=""><br>
     <label for="password">password:</label><input type="password" name=password value=""><br>
+    <h1>webdo-meteor project to update</h1>
+    <label for="url">Server URL:</label><input name=url value=""><br>
     <button type="submit">send</button>
   </form>
-  <iframe style="display:none" name="fake_iframe" src="javascript:false"></iframe>
-  <h1>users:</h1>
-  {{#each users}}
-  <div>{{name}}: {{rows.length}}</div>
+  <h1>Logs:</h1>
+  <table>
+    <tr><th>name
+    </th><th>to migrate
+    </th><th>migrated
+    </th><th>alreay migrated
+    </th><th>migration failed
+    </th></tr>
+  {{#each migrations}}
+    <tr><td>{{name}}
+    </td><td>{{toMigrate}}
+    </td><td>{{migrated}}
+    </td><td>{{alreadyMigrated}}
+    </td><td>{{migrationFailed}}
+    </td></tr>
   {{/each}}
+  </table>
+
+
+  <h1>Errors:</h1>
+  {{#each errors}}
+  <div class="error" title="{{stack}}">{{context}}: {{message}}</div>
+  {{/each}}
+  <iframe style="display:none" name="fake_iframe" src="javascript:false"></iframe>
 </template>
