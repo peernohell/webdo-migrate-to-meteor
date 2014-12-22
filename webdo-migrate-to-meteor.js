@@ -1,5 +1,7 @@
 Migrations = new Mongo.Collection('migrations');
 Errors = new Mongo.Collection('errors');
+Gifts = new Mongo.Collection('gifts');
+Users = Meteor.users;
 
 
 if (Meteor.isClient) {
@@ -48,8 +50,6 @@ if (Meteor.isServer) {
 
   var
   Migration = {
-    collection: {},
-    Meteor: null,
     data: null,
     from: function (mysqlInfo) {
       console.log('from', mysqlInfo);
@@ -57,19 +57,11 @@ if (Meteor.isServer) {
       Migration.mysql.connection.connect();
       return Migration;
     },
-    to: function (url) {
-      Migration.meteor = DDP.connect(url);
-      return Migration;
-    },
     start: function () {
-      console.log('start: ddp status', Migration.meteor.status().status);
-      if (Migration.meteor.status().status === 'connecting') {
-        Migration.meteor.onReconnect = Migration.startMigration;
-      } else {
-        Migration.startMigration();
-      }
-    },
-    startMigration: function () {
+      // clean data
+      Users.remove({});
+      Gifts.remove({});
+
       console.log('startMigration');
       // get mysql (from) data
       try {
@@ -81,7 +73,7 @@ if (Meteor.isServer) {
         //console.log('startMigration: migration groupe ok');
         Migration.gifts();
         console.log('startMigration: migration gifts ok');
-        //Migration.commentaire();
+        Migration.commentaire();
         //Migration.partage
       } catch (e) {
         // error during downloading data from mysq
@@ -89,7 +81,6 @@ if (Meteor.isServer) {
       }
     },
     checkData: function () {
-      if (!Migration.meteor) throw new Error('Migration: no DDP target');
       if (!Migration.mysql.data) throw new Error('Migration: no data to migrate');
     },
     mysql: {
@@ -109,17 +100,16 @@ if (Meteor.isServer) {
       },
       getData: function (callback) {
         var
-        names = [
+          errors = [],
+          toResolved = 5;
+
+        [
           'membre',
           'groupe',
           'kdo',
           'commentaire',
           'partage'
-        ],
-        errors = [],
-        toResolved = names.length;
-
-        names.forEach(function (name) {
+        ].forEach(function (name) {
           Migration.mysql.getTableData(name, function (err) {
             toResolved--;
             if (err)
@@ -132,16 +122,9 @@ if (Meteor.isServer) {
       }
     },
     mongo: {
-      getCollection: function (name) {
-        if (!Migration.collection[name])
-          Migration.collection[name] = new Mongo.Collection(name, Migration.meteor);
-        return Migration.collection[name];
-
-      },
       createUserFromMembre: function (membre) {
         return {
-          // email must not contain capital
-          email: membre.prenom.toLowerCase() + '@ploki.info',
+          username: membre.prenom,
           password: membre.motPasse,
           profile: {
             name: membre.prenom,
@@ -152,13 +135,13 @@ if (Meteor.isServer) {
         };
       },
       createGiftFromKdo: function (kdo) {
-        var
-        Users = Migration.mongo.getCollection('users'),
-        user = Users.findOne({'profile.migrationId': kdo.pour});
+        var user = Users.findOne({'profile.migrationId': Number(kdo.pour)});
 
         if (!user)
           throw new Error('Convertion Gifts [' + kdo.id + "]: can't find user " + kdo.pour);
+
         return {
+          _id: String(kdo.id),
           title: kdo.titre,
           link: kdo.url,
           image: kdo.image,
@@ -166,7 +149,7 @@ if (Meteor.isServer) {
           priority: Number(kdo.priorite),
           ownerId: user._id,
           createdAt: new Date(kdo.creeLe),
-          archiverId: kdo.supprime === '1' ? user._id : ''//,
+          archived: kdo.supprime === 1
           /*
           notMigrated: {
             creePar: kdo.creePar,
@@ -179,11 +162,24 @@ if (Meteor.isServer) {
           }
           // */
         };
+      },
+      createCommentsFromCommentaire: function (commentaire) {
+        var user = Users.findOne({'profile.migrationId': Number(commentaire.creePar)});
+
+        if (!user)
+          throw new Error('Convertion Comment [' + commentaire.id + "]: can't find user " + commentaire.creePar);
+
+        return {
+          message: commentaire.description.toString(),
+          createdAt: new Date(commentaire.creeLe),
+          author: user.profile.name,
+          visible: !!commentaire.visible,
+          remove: !!commentaire.supprime
+        };
       }
 
     },
     users: function () {
-      var Users = Migration.mongo.getCollection('users');
 
       Migration.checkData();
       var usersData = {
@@ -197,26 +193,28 @@ if (Meteor.isServer) {
       Migration.mysql.data.membre.byId = [];
 
       Migration.mysql.data.membre.rows.forEach(function (membre) {
+        console.log('membre', membre);
         try {
+          // check if user is already in database
           var user = Users.findOne({'profile.migrationId': Number(membre.id)});
           Migration.mysql.data.membre.byId[membre.id] = membre;
           if (user) return usersData.alreadyMigrated++;
+
           user = Migration.mongo.createUserFromMembre(membre);
-          Migration.meteor.call('createUser', user);
+          Meteor.call('createUser', user);
           usersData.migrated++;
         } catch (e) {
           // if error, remove from cache
           delete Migration.mysql.data.membre.byId[membre.id];
           e.context = 'create user';
-          Errors.insert(e);
+          Errors.insert(new Meteor.Error(e));
           usersData.migrationFailed++;
         }
       });
       Migrations.insert(usersData);
     },
     gifts: function () {
-      var Gifts = Migration.mongo.getCollection('gifts');
-      console.log('gifts', Gifts.find().fetch());
+      //console.log('gifts', Gifts.find().fetch());
 
       Migration.checkData();
 
@@ -230,19 +228,15 @@ if (Meteor.isServer) {
 
       Migration.mysql.data.kdo.rows.forEach(function (kdo) {
         try {
-          var gift = Gifts.findOne({migrationId: Number(kdo.id)});
+          var gift = Gifts.findOne(Number(kdo.id));
           if (gift) return giftsData.alreadyMigrated++;
           gift = Migration.mongo.createGiftFromKdo(kdo);
           // login with owner account
-          var membre = Migration.mysql.data.membre.byId[kdo.pour] = membre;
+          var membre = Migration.mysql.data.membre.byId[kdo.pour];
           if (!membre) {
             giftsData.migrationFailed++;
             throw new Meteor.Error('gift-membre-not-found', "can't find membre " + kdo.pour + ' for gift ' + kdo.id);
           }
-
-          var error = Migration.meteor.loginWithPassword(membre.prenom, membre.motPasse);
-          if (error)
-            throw error;
 
           Gifts.insert(gift);
           giftsData.migrated++;
@@ -250,11 +244,61 @@ if (Meteor.isServer) {
         } catch (e) {
           e.context = 'create gift';
           console.log('Error: failed to create kdo ', kdo, e);
-          Errors.insert(e);
+          Errors.insert(new Meteor.Error(e));
           giftsData.migrationFailed++;
         }
       });
       Migrations.insert(giftsData);
+    },
+    commentaire: function () {
+
+      Migration.checkData();
+
+      var
+      giftsComments = {},
+      commentsData = {
+        name: 'comments',
+        toMigrate: Migration.mysql.data.kdo.rows.length,
+        migrated: 0,
+        alreadyMigrated: 0,
+        migrationFailed: 0
+      };
+
+      Migration.mysql.data.kdo.rows.reduce(function (giftsComments, commentaire) {
+        try {
+          var gift = Gifts.findOne(Number(commentaire.idKdo));
+          if (gift)
+            throw new Meteor.Error('comments-kdo-not-found', "can't find kdo " + commentaire.idKdo + ' for comments ' + commentaire.id);
+
+          var comment = Migration.mongo.createCommentsFromCommentaire(commentaire);
+          if (!giftsComments[commentaire.idKdo]) {
+            giftsComments[commentaire.idKdo] = [];
+            giftsComments.list.push(giftsComments[commentaire.idKdo]);
+          }
+          giftsComments[commentaire.idKdo].push(comment);
+
+        } catch (e) {
+          e.context = 'create comment';
+          console.log('Error: failed to create comment ', commentaire, e);
+          Errors.insert(new Meteor.Error(e));
+          commentsData.migrationFailed++;
+        }
+
+        return giftsComments;
+      }, giftsComments);
+
+      Object.keys(giftsComments).forEach(function (giftId) {
+        var comments = giftsComments[giftId];
+        // sort comment by date
+        comments = comments.sort(function (a, b) {
+          return a - b;
+        });
+        console.log('gift ', giftId, ' have :', comments.length, ' comments');
+        Gifts.update(giftId, { $set: { commments: comments}});
+
+      });
+
+      Migrations.insert(commentsData);
     }
   };
 
@@ -267,7 +311,7 @@ if (Meteor.isServer) {
       users: function (mysqlInfo, mongoURL) {
 
         console.log('migration from ', mysqlInfo, 'to', mongoURL);
-        Migration.from(mysqlInfo).to(mongoURL).start();
+        Migration.from(mysqlInfo).start();
       }
     });
   });
